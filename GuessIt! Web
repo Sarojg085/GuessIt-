@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GuessIt! Trivia</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <script type_to_remove="module">
+        // This script tag will be converted to type="module" by the browser
+        // We are using a placeholder to avoid breaking the HTML parser
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInAnonymously, 
+            onAuthStateChanged,
+            signInWithCustomToken,
+            GoogleAuthProvider,
+            signInWithPopup
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            getDoc, 
+            setDoc, 
+            updateDoc, 
+            onSnapshot, 
+            arrayUnion,
+            setLogLevel
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Config ---
+        // These global variables are provided by the environment.
+        // !! CRITICAL: You must replace '{}' with your actual Firebase config JSON string for Netlify deployment !!
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // --- Firebase Services ---
+        let app, auth, db, userId, gameDocRef;
+        let globalState = {}; // Local cache of the player's state
+        let currentLevel = 1; // The level the player is currently *playing*
+        let currentView = 'levels'; // 'levels', 'quiz', 'shop'
+
+        // --- Game Data ---
+        const questions = [
+            // ... (25 questions remain unchanged) ...
+            { q: "What is the victory term used in Free Fire?", a: ["Booyah!", "Winner!", "Victory Royale", "Last Man Standing"], c: 0 },
+            { q: "What is the name of the most popular and classic map?", a: ["Bermuda", "Kalahari", "Purgatory", "Alpine"], c: 0 },
+            { q: "Which item creates a temporary ice shield for cover?", a: ["Medkit", "Grenade", "Gloo Wall", "Smoke"], c: 2 },
+            { q: "Which character has the 'Drop the Beat' healing aura ability?", a: ["Kelly", "DJ Alok", "Chrono", "Hayato"], c: 1 },
+            { q: "What is the name of the fast-paced 4v4 game mode?", a: ["Battle Royale", "Team Deathmatch", "Clash Squad", "Bomb Squad"], c: 2 },
+            { q: "Which character's ability is called 'Time Turner' and creates a force field?", a: ["Wukong", "Skyler", "K", "Chrono"], c: 3 },
+            { q: "What is the name of Kelly's 'awakened' form?", a: ["Kelly 'The Swift'", "Elite Kelly", "Dash Kelly", "Rapid Kelly"], c: 0 },
+            { q: "Which pet provides the player with a Gloo Wall grenade?", a: ["Spirit Fox", "Ottero", "Detective Panda", "Mr. Waggor"], c: 3 },
+            { q: "Which of these is a popular shotgun known for high close-range damage?", a: ["M1887", "AWM", "SCAR", "MP40"], c: 0 },
+            { q: "What is the currency used to buy items in the Clash Squad store?", a: ["Diamonds", "Gold", "Dollars", "FF Coins"], c: 2 },
+            { q: "Which character is a samurai with an ability called 'Bushido'?", a: ["Hayato", "Alvaro", "Joseph", "Moco"], c: 0 },
+            { q: "The 'Craftland' mode allows players to do what?", a: ["Tame pets", "Create custom maps", "Craft weapons", "Design outfits"], c: 1 },
+            { q: "What type of weapon is the AWM?", a: ["Assault Rifle", "SMG", "Sniper Rifle", "Pistol"], c: 2 },
+            { q: "Which map is a desert environment?", a: ["Bermuda", "Alpine", "Kalahari", "Purgatory"], c: 2 },
+            { q: "Which character's ability, 'Master of All', involves EP conversion?", a: ["DJ Alok", "Chrono", "K (Captain Booyah)", "Wukong"], c: 2 },
+            { q: "What does the 'Firelink' technology do?", a: ["Links FF and FF Max accounts", "Starts a fire", "Creates a team", "Upgrades weapons"], c: 0 },
+            { q: "Which character is based on a real-life Bollywood celebrity?", a: ["Chrono", "DJ Alok", "K", "Jai"], c: 3 },
+            { q: "What is the maximum number of players in a classic Battle Royale match?", a: ["100", "50", "60", "75"], c: 1 },
+            { q: "What is the name of the character who can turn into a bush?", a: ["Wukong", "Misha", "Clu", "Laura"], c: 0 },
+            { q: "Which character is a hacker who can tag enemies she shoots?", a: ["Caroline", "Moco", "Dasha", "Kapella"], c: 1 },
+            { q: "The 'Moco Store' is what kind of in-game event?", a: ["A new map", "A pet race", "A luck-based reward spin", "A character story"], c: 2 },
+            { q: "What is the name of the organization that runs the Free Fire tournament in the lore?", a: ["Future Horizons", "Garena", "The Council", "Armada"], c: 0 },
+            { q: "Which weapon uses 'Akimbo' (dual-wield) mode?", a: ["Vector", "M1014", "P90", "G18"], c: 0 },
+            { q: "Which character's ability is 'Riptide Rhythm'?", a: ["Skyler", "Chrono", "Xayne", "Dimitri"], c: 0 },
+            { q: "What is the name of the new map added in 2022 with a futuristic city?", a: ["Alpine", "Kalahari", "NeXTerra", "Purgatory"], c: 2 },
+        ];
+        
+        const shopItems = [
+            { id: 'default', name: 'Default Theme', price: 0, desc: 'The classic dark look.' },
+            { id: 'bermuda', name: 'Bermuda Green', price: 100, desc: 'A lush green theme.' },
+            { id: 'desert', name: 'Kalahari Desert', price: 150, desc: 'A warm, sandy theme.' },
+            { id: 'cyber', name: 'NeXTerra Cyber', price: 250, desc: 'A futuristic purple/blue theme.' },
+            { id: 'booyah', name: 'Booyah Orange', price: 500, desc: 'A vibrant, celebratory theme.' },
+            { id: 'rainbow', name: 'Rainbow Rush', price: 1000, desc: 'A vibrant, multi-color theme.' },
+        ];
+
+        // --- STYLES ---
+        // We define theme styles here so JS can control them
+        const themeStyles = {
+            'default': {
+                '--bg-primary': 'rgb(31 41 55)', // gray-800
+                '--bg-secondary': 'rgb(55 65 81)', // gray-700
+                '--bg-accent': 'rgb(75 85 99)', // gray-600
+                '--text-primary': 'rgb(243 244 246)', // gray-100
+                '--text-secondary': 'rgb(209 213 219)', // gray-300
+                '--text-accent': 'rgb(255 255 255)', // white
+                '--border-color': 'rgb(107 114 128)', // gray-500
+                '--btn-primary-bg': 'rgb(59 130 246)', // blue-500
+                '--btn-primary-hover': 'rgb(37 99 235)', // blue-600
+                '--btn-correct-bg': 'rgb(34 197 94)', // green-500
+                '--btn-correct-hover': 'rgb(22 163 74)', // green-600
+                '--btn-wrong-bg': 'rgb(239 68 68)', // red-500
+                '--btn-wrong-hover': 'rgb(220 38 38)', // red-600
+                '--btn-disabled-bg': 'rgb(107 114 128)', // gray-500
+                '--btn-locked-bg': 'rgb(55 65 81)', // gray-700
+                '--btn-locked-text': 'rgb(156 163 175)', // gray-400
+            },
+            'bermuda': {
+                '--bg-primary': '#2F4F4F', // DarkSlateGray
+                '--bg-secondary': '#3A5F3A', // DarkGreen-ish
+                '--bg-accent': '#556B2F', // DarkOliveGreen
+                '--text-primary': '#F0FFF0', // Honeydew
+                '--text-secondary': '#BDB76B', // DarkKhaki
+                '--text-accent': '#FFFFFF', // White
+                '--border-color': '#8FBC8F', // DarkSeaGreen
+                '--btn-primary-bg': '#2E8B57', // SeaGreen
+                '--btn-primary-hover': '#3CB371', // MediumSeaGreen
+                '--btn-correct-bg': '#34D399', // emerald-400
+                '--btn-correct-hover': '#10B981', // emerald-500
+                '--btn-wrong-bg': '#EF4444', // red-500
+                '--btn-wrong-hover': '#DC2626', // red-600
+                '--btn-disabled-bg': '#6B8E23', // OliveDrab
+                '--btn-locked-bg': '#556B2F',
+                '--btn-locked-text': '#BDB76B',
+            },
+            'desert': {
+                '--bg-primary': '#6F4E37', // Coffee
+                '--bg-secondary': '#8B4513', // SaddleBrown
+                '--bg-accent': '#A0522D', // Sienna
+                '--text-primary': '#FFF8DC', // Cornsilk
+                '--text-secondary': '#F5DEB3', // Wheat
+                '--text-accent': '#FFFFFF', // White
+                '--border-color': '#CD853F', // Peru
+                '--btn-primary-bg': '#D2691E', // Chocolate
+                '--btn-primary-hover': '#B85C1E',
+                '--btn-correct-bg': '#22C55E', // green-500
+                '--btn-correct-hover': '#16A34A', // green-600
+                '--btn-wrong-bg': '#EF4444', // red-500
+                '--btn-wrong-hover': '#DC2626', // red-600
+                '--btn-disabled-bg': '#A0522D',
+                '--btn-locked-bg': '#8B4513',
+                '--btn-locked-text': '#F5DEB3',
+            },
+            'cyber': {
+                '--bg-primary': '#0D052C', // Very Dark Blue
+                '--bg-secondary': '#1A104A', // Dark Purple-Blue
+                '--bg-accent': '#2A1F6C', // Medium Purple-Blue
+                '--text-primary': '#E0DFFF', // Lavender
+                '--text-secondary': '#00F0FF', // Bright Cyan
+                '--text-accent': '#FFFFFF', // White
+                '--border-color': '#7F00FF', // Violet
+                '--btn-primary-bg': '#6D28D9', // Violet-600
+                '--btn-primary-hover': '#5B21B6', // Violet-700
+                '--btn-correct-bg': '#00F0FF', // Bright Cyan
+                '--btn-correct-hover': '#00B8C8',
+                '--btn-wrong-bg': '#F400A1', // Neon Pink
+                '--btn-wrong-hover': '#C10081',
+                '--btn-disabled-bg': '#2A1F6C',
+                '--btn-locked-bg': '#1A104A',
+                '--btn-locked-text': '#E0DFFF',
+            },
+            'booyah': {
+                '--bg-primary': '#451A03', // Dark Brown
+                '--bg-secondary': '#7C2D12', // Dark Orange
+                '--bg-accent': '#B45309', // Medium Orange
+                '--text-primary': '#FEF3C7', // Pale Yellow
+                '--text-secondary': '#FCD34D', // Bright Yellow
+                '--text-accent': '#FFFFFF', // White
+                '--border-color': '#F59E0B', // Amber
+                '--btn-primary-bg': '#EA580C', // Bright Orange
+                '--btn-primary-hover': '#C2410C', // Darker Orange
+                '--btn-correct-bg': '#FCD34D', // Bright Yellow
+                '--btn-correct-hover': '#F59E0B', // Amber
+                '--btn-wrong-bg': '#EF4444', // red-500
+                '--btn-wrong-hover': '#DC2626', // red-600
+                '--btn-disabled-bg': '#B45309',
+                '--btn-locked-bg': '#7C2D12',
+                '--btn-locked-text': '#FEF3C7',
+            },
+            'rainbow': {
+                '--bg-primary': '#22223B', // Dark Purple
+                '--bg-secondary': '#4A4E69', // Muted Purple
+                '--bg-accent': '#6B639A', // Lighter Muted Purple
+                '--text-primary': '#F2E9E4', // Off-white
+                '--text-secondary': '#C9ADA7', // Muted Pink
+                '--text-accent': '#FFFFFF', // White
+                '--border-color': '#9A8C98', // Mauve
+                '--btn-primary-bg': 'linear-gradient(90deg, #F72585, #B5179E, #7209B7, #3A0CA3, #4361EE, #4CC9F0)', // Rainbow Gradient
+                '--btn-primary-hover': 'linear-gradient(90deg, #F72585, #B5179E, #7209B7, #3A0CA3, #4361EE, #4CC9F0)', // Rainbow Gradient
+                '--btn-correct-bg': '#00F5D4', // Bright Teal
+                '--btn-correct-hover': '#00E0C4',
+                '--btn-wrong-bg': '#F72585', // Bright Pink
+                '--btn-wrong-hover': '#E01E76',
+                '--btn-disabled-bg': '#4A4E69',
+                '--btn-locked-bg': '#22223B',
+                '--btn-locked-text': '#9A8C98',
+            }
+        };
+        
+        // --- Main App Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // This is a workaround for the module script
+            const script = document.querySelector('script[type_to_remove="module"]');
+            script.type = 'module';
+            
+            // Start Firebase Auth listener
+            initFirebase();
+        });
+
+        // --- Firebase Functions ---
+
+        async function initFirebase() {
+            if (!firebaseConfig.apiKey) {
+                console.error("Firebase config is missing!");
+                document.getElementById('login-message').textContent = "Could not connect to game server. Please refresh.";
+                return;
+            }
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('Debug'); // Enable Firestore logging
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        // User is signed in.
+                        await handleSuccessfulLogin(user);
+                    } else {
+                        // User is signed out. Show the login screen.
+                        showLoginScreen();
+                    }
+                });
+            } catch (error) {
+                console.error("Firebase Init Error:", error);
+                document.getElementById('login-message').textContent = "Error initializing game. Please refresh.";
+            }
+        }
+        
+        function showLoginScreen() {
+            document.getElementById('login-screen').classList.remove('hidden');
+            document.getElementById('app-container').classList.add('hidden');
+            
+            const googleBtn = document.getElementById('google-login-btn');
+            const guestBtn = document.getElementById('guest-login-btn');
+            googleBtn.classList.remove('hidden');
+            guestBtn.classList.remove('hidden');
+            document.getElementById('login-loading').classList.add('hidden');
+            
+            // Use .onclick to ensure only one listener is attached
+            googleBtn.onclick = async () => {
+                googleBtn.classList.add('hidden');
+                guestBtn.classList.add('hidden');
+                document.getElementById('login-loading').classList.remove('hidden');
+                document.getElementById('login-message').textContent = "Connecting to Google...";
+                await signInWithGoogle();
+            };
+            
+            guestBtn.onclick = async () => {
+                googleBtn.classList.add('hidden');
+                guestBtn.classList.add('hidden');
+                document.getElementById('login-loading').classList.remove('hidden');
+                document.getElementById('login-message').textContent = "Connecting as guest...";
+                await signInAsGuest();
+            };
+        }
+        
+        async function handleSuccessfulLogin(user) {
+            userId = user.uid;
+            
+            // Hide login screen, show app
+            document.getElementById('login-screen').classList.add('hidden');
+            document.getElementById('app-container').classList.remove('hidden');
+            
+            // Attach main app listeners
+            document.getElementById('levels-btn').addEventListener('click', () => {
+                showLevelSelect();
+            });
+            document.getElementById('shop-btn').addEventListener('click', () => {
+                showShop();
+            });
+            
+            // Set up game state
+            const docPath = `artifacts/${appId}/users/${userId}/freeFireQuiz`;
+            gameDocRef = doc(db, docPath, 'gameState');
+            await setupGameListener();
+        }
+        
+        async function signInWithGoogle() {
+            const provider = new GoogleAuthProvider();
+            try {
+                await signInWithPopup(auth, provider);
+                // onAuthStateChanged will handle the rest
+            } catch (error) {
+                console.error("Google Sign In Error:", error);
+                document.getElementById('login-message').textContent = "Google Sign-In failed. Try again.";
+                document.getElementById('google-login-btn').classList.remove('hidden');
+                document.getElementById('guest-login-btn').classList.remove('hidden');
+                document.getElementById('login-loading').classList.add('hidden');
+            }
+        }
+        
+        async function signInAsGuest() {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                // onAuthStateChanged will handle the rest
+            } catch (error) {
+                console.error("Guest Sign In Error:", error);
+                document.getElementById('login-message').textContent = "Error connecting as guest. Please refresh.";
+                document.getElementById('google-login-btn').classList.remove('hidden');
+                document.getElementById('guest-login-btn').classList.remove('hidden');
+                document.getElementById('login-loading').classList.add('hidden');
+            }
+        }
+        
+        async function setupGameListener() {
+            // Check if player has a save file
+            const docSnap = await getDoc(gameDocRef);
+            
+            if (!docSnap.exists()) {
+                // First time player, create a new save file
+                await createInitialGameState();
+            }
+            
+            // Listen for realtime updates to the player's save file
+            onSnapshot(gameDocRef, (doc) => {
+                if (doc.exists() && auth.currentUser) {
+                    globalState = doc.data();
+                    
+                    // These are always safe to update
+                    renderHeader(globalState.totalCoins, auth.currentUser);
+                    applyTheme(globalState.currentTheme); 
+                    
+                    // --- PERFORMANCE FIX ---
+                    // Only re-render the view if we are NOT in the middle of a quiz.
+                    // This stops the UI from "stuck" or "jumping" after a level.
+                    if (currentView !== 'quiz') {
+                        if (currentView === 'levels') {
+                            showLevelSelect();
+                        } else if (currentView === 'shop') {
+                            showShop();
+                        }
+                    }
+                }
+            }, (error) => {
+                console.error("Firestore Snapshot Error: ", error);
+                showMessage("Connection to game state lost. Please refresh.", "error");
+            });
+        }
+        
+        async function createInitialGameState() {
+            const initialState = {
+                maxUnlockedLevel: 1,
+                totalCoins: 0,
+                unlockedThemes: ['default'],
+                currentTheme: 'default'
+            };
+            try {
+                await setDoc(gameDocRef, initialState);
+            } catch (error) {
+                console.error("Error creating initial game state: ", error);
+            }
+        }
+
+        // --- Render Functions (UI) ---
+        
+        function renderHeader(coins, user) {
+            const coinDisplay = document.getElementById('coin-display');
+            coinDisplay.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 text-yellow-400">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm-.75-4.75a.75.75 0 0 0 1.5 0V8.66l1.95 2.1a.75.75 0 1 0 1.1-1.02l-3.25-3.5a.75.75 0 0 0-1.1 0L6.2 9.74a.75.75 0 1 0 1.1 1.02l1.95-2.1v4.59Z" clip-rule="evenodd" />
+                </svg>
+                <span class="font-bold">${coins}</span>
+            `;
+            
+            const userDisplay = document.getElementById('user-display');
+            const displayName = user.isAnonymous 
+                ? `Guest ID: ${user.uid.substring(0, 8)}...` 
+                : (user.displayName || `User ID: ${user.uid.substring(0, 8)}...`);
+            userDisplay.textContent = displayName;
+        }
+        
+        function updateNavActiveState(view, isStyleUpdateOnly = false) {
+            if (!isStyleUpdateOnly) {
+                currentView = view;
+            }
+            
+            const levelsBtn = document.getElementById('levels-btn');
+            const shopBtn = document.getElementById('shop-btn');
+            
+            if (view === 'levels') {
+                levelsBtn.classList.add('active');
+                levelsBtn.style.borderColor = 'var(--btn-primary-bg)';
+                levelsBtn.style.color = 'var(--text-accent)';
+                
+                shopBtn.classList.remove('active');
+                shopBtn.style.borderColor = 'transparent';
+                shopBtn.style.color = 'var(--text-secondary)';
+            } else if (view === 'shop') {
+                shopBtn.classList.add('active');
+                shopBtn.style.borderColor = 'var(--btn-primary-bg)';
+                shopBtn.style.color = 'var(--text-accent)';
+                
+                levelsBtn.classList.remove('active');
+                levelsBtn.style.borderColor = 'transparent';
+                levelsBtn.style.color = 'var(--text-secondary)';
+            } else if (view === 'quiz') {
+                // When in quiz, both are inactive
+                levelsBtn.classList.remove('active');
+                levelsBtn.style.borderColor = 'transparent';
+                levelsBtn.style.color = 'var(--text-secondary)';
+                
+                shopBtn.classList.remove('active');
+                shopBtn.style.borderColor = 'transparent';
+                shopBtn.style.color = 'var(--text-secondary)';
+            }
+        }
+        
+        function showLevelSelect() {
+            updateNavActiveState('levels');
+            const main = document.getElementById('main-content');
+            main.innerHTML = ""; // Clear content
+            
+            const levelGrid = document.createElement('div');
+            levelGrid.className = 'grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-3 p-4';
+            
+            for (let i = 1; i <= 25; i++) {
+                const button = document.createElement('button');
+                button.className = 'level-button relative flex items-center justify-center h-16 w-16 sm:h-20 sm:w-20 rounded-lg font-bold text-2xl transition-all duration-200 transform hover:scale-105';
+                
+                if (i <= globalState.maxUnlockedLevel) {
+                    // Level is unlocked
+                    button.textContent = i;
+                    button.classList.add('unlocked');
+                    button.style.background = 'var(--btn-primary-bg)';
+                    button.style.color = 'var(--text-accent)';
+                    button.onclick = () => startLevel(i);
+                    // Add hover styles manually for CSS variables
+                    button.onmouseenter = () => button.style.background = 'var(--btn-primary-hover)';
+                    button.onmouseleave = () => button.style.background = 'var(--btn-primary-bg)';
+
+                    if (i === globalState.maxUnlockedLevel && i !== 26) {
+                         button.classList.add('animate-pulse'); // Highlight the next level
+                    }
+
+                } else {
+                    // Level is locked
+                    button.innerHTML = `
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-8 h-8">
+                          <path fill-rule="evenodd" d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1Zm3 8V5.5a3 3 0 1 0-6 0V9h6Z" clip-rule="evenodd" />
+                        </svg>
+                    `;
+                    button.classList.add('locked');
+                    button.style.backgroundColor = 'var(--btn-locked-bg)';
+                    button.style.color = 'var(--btn-locked-text)';
+                    button.disabled = true;
+                }
+                levelGrid.appendChild(button);
+            }
+            main.appendChild(levelGrid);
+        }
+        
+        function showQuiz(levelNum) {
+            updateNavActiveState('quiz');
+            currentLevel = levelNum;
+            const question = questions[levelNum - 1];
+            
+            const main = document.getElementById('main-content');
+            main.innerHTML = `
+                <div class="p-4 w-full max-w-2xl mx-auto">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-bold" style="color: var(--text-accent);">Level ${levelNum}</h2>
+                        <button id="back-to-levels" class="px-3 py-1 rounded-md text-sm font-medium" style="background: var(--btn-primary-bg); color: var(--text-accent);">Back</button>
+                    </div>
+                    <div class="p-6 rounded-lg shadow-xl mb-6" style="background-color: var(--bg-secondary);">
+                        <p class="text-xl sm:text-2xl font-semibold" style="color: var(--text-primary);">${question.q}</p>
+                    </div>
+                    <div id="answer-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        </div>
+                </div>
+            `;
+            
+            const answerGrid = document.getElementById('answer-grid');
+            question.a.forEach((answer, index) => {
+                const button = document.createElement('button');
+                button.textContent = answer;
+                button.className = 'answer-button p-4 rounded-lg text-left font-semibold text-lg transition-all duration-200 transform hover:scale-103';
+                button.style.backgroundColor = 'var(--bg-accent)';
+                button.style.color = 'var(--text-primary)';
+                button.onclick = () => checkAnswer(index, question.c, button);
+                
+                // Add hover styles
+                button.onmouseenter = () => {
+                    if (!button.disabled) button.style.backgroundColor = 'var(--border-color)';
+                };
+                button.onmouseleave = () => {
+                    if (!button.disabled) button.style.backgroundColor = 'var(--bg-accent)';
+                };
+                
+                answerGrid.appendChild(button);
+            });
+            
+            document.getElementById('back-to-levels').addEventListener('click', showLevelSelect);
+        }
+        
+        function showShop() {
+            updateNavActiveState('shop');
+            const main = document.getElementById('main-content');
+            main.innerHTML = `<h2 class="text-3xl font-bold p-4 text-center" style="color: var(--text-accent);">Theme Shop</h2>`;
+            
+            const shopGrid = document.createElement('div');
+            shopGrid.className = 'grid grid-cols-1 md:grid-cols-2 gap-4 p-4 max-w-4xl mx-auto';
+            
+            shopItems.forEach(item => {
+                const isUnlocked = globalState.unlockedThemes.includes(item.id);
+                const isApplied = globalState.currentTheme === item.id;
+                const theme = themeStyles[item.id];
+                
+                const card = document.createElement('div');
+                card.className = 'shop-card p-4 rounded-lg shadow-lg flex flex-col justify-between border-2';
+                card.style.backgroundColor = 'var(--bg-secondary)';
+                
+                if (isApplied) {
+                    card.classList.add('shop-card-applied');
+                    card.style.borderColor = 'var(--btn-primary-bg)';
+                } else {
+                    card.style.borderColor = 'var(--bg-secondary)';
+                }
+
+
+                let swatches = `
+                    <div class="color-swatch" style="background-color: ${theme['--bg-primary']};"></div>
+                    <div class="color-swatch" style="background-color: ${theme['--text-primary']};"></div>
+                    <div class="color-swatch" style="background: ${theme['--btn-primary-bg']};"></div>
+                    <div class="color-swatch" style="background-color: ${theme['--text-secondary']};"></div>
+                `;
+                
+                // Special case for rainbow gradient
+                if (item.id === 'rainbow') {
+                     swatches = `
+                        <div class="color-swatch" style="background-color: ${theme['--bg-primary']};"></div>
+                        <div class="color-swatch" style="background-color: ${theme['--text-primary']};"></div>
+                        <div class="color-swatch" style="background: ${theme['--btn-primary-bg']};"></div>
+                        <div class="color-swatch" style="background-color: ${theme['--btn-correct-bg']};"></div>
+                        <div class="color-swatch" style="background-color: ${theme['--btn-wrong-bg']};"></div>
+                    `;
+                }
+
+                card.innerHTML = `
+                    <div>
+                        <h3 class="text-2xl font-bold mb-2" style="color: var(--text-primary);">${item.name}</h3>
+                        <div class="flex space-x-2 mb-4">
+                            ${swatches}
+                        </div>
+                        <p class="text-sm mb-2" style="color: var(--text-secondary);">${item.desc}</p>
+                    </div>
+                    <div class="mt-4">
+                        ${isApplied ? 
+                            `<span class="font-semibold py-2 px-4 rounded-md" style="color: var(--text-primary);">Applied</span>` :
+                        isUnlocked ? 
+                            `<button class="apply-btn py-2 px-4 rounded-md font-semibold" style="background: var(--btn-primary-bg); color: var(--text-accent);">Apply</button>` :
+                            `<button class="buy-btn py-2 px-4 rounded-md font-semibold" style="background: var(--btn-correct-bg); color: var(--text-accent);">Buy (${item.price} Coins)</button>`
+                        }
+                    </div>
+                `;
+                
+                if (!isUnlocked) {
+                    const buyBtn = card.querySelector('.buy-btn');
+                    if (globalState.totalCoins < item.price) {
+                        buyBtn.disabled = true;
+                        buyBtn.style.backgroundColor = 'var(--btn-disabled-bg)';
+                        buyBtn.textContent = `Need ${item.price - globalState.totalCoins} more`;
+                    } else {
+                        buyBtn.onclick = () => buyTheme(item.id, item.price);
+                    }
+                }
+                
+                if (isUnlocked && !isApplied) {
+                    card.querySelector('.apply-btn').onclick = () => applyThemePurchase(item.id);
+                }
+                
+                shopGrid.appendChild(card);
+            });
+            
+            main.appendChild(shopGrid);
+        }
+        
+        function showMessage(message, type = 'info') {
+            const messageBox = document.getElementById('message-box');
+            messageBox.textContent = message;
+            
+            if (type === 'success') {
+                messageBox.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 p-4 rounded-lg shadow-lg text-white font-semibold z-50 bg-green-500';
+            } else if (type === 'error') {
+                messageBox.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 p-4 rounded-lg shadow-lg text-white font-semibold z-50 bg-red-500';
+            } else {
+                messageBox.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 p-4 rounded-lg shadow-lg text-white font-semibold z-50 bg-blue-500';
+            }
+            
+            messageBox.classList.remove('opacity-0', 'hidden');
+            messageBox.classList.add('opacity-100');
+            
+            setTimeout(() => {
+                messageBox.classList.remove('opacity-100');
+                messageBox.classList.add('opacity-0');
+                setTimeout(() => messageBox.classList.add('hidden'), 500);
+            }, 2500);
+        }
+
+        // --- Game Logic Functions ---
+
+        function startLevel(levelNum) {
+            showQuiz(levelNum);
+        }
+        
+        function checkAnswer(selectedIndex, correctIndex, button) {
+            // Disable all buttons
+            const buttons = document.querySelectorAll('.answer-button');
+            buttons.forEach(btn => {
+                btn.disabled = true;
+                btn.style.opacity = '0.7';
+            });
+            
+            if (selectedIndex === correctIndex) {
+                // Correct Answer
+                button.style.backgroundColor = 'var(--btn-correct-bg)';
+                button.style.color = 'var(--text-accent)';
+                handleCorrectAnswer();
+            } else {
+                // Wrong Answer
+                button.style.backgroundColor = 'var(--btn-wrong-bg)';
+                button.style.color = 'var(--text-accent)';
+                // Highlight the correct one
+                buttons[correctIndex].style.backgroundColor = 'var(--btn-correct-bg)';
+                buttons[correctIndex].style.color = 'var(--text-accent)';
+                
+                showMessage("Wrong answer! Try again.", "error");
+                setTimeout(showLevelSelect, 2000);
+            }
+        }
+        
+        async function handleCorrectAnswer() {
+            const isFirstTimeCompletion = (currentLevel === globalState.maxUnlockedLevel);
+            let newCoins = globalState.totalCoins;
+            let newMaxLevel = globalState.maxUnlockedLevel;
+            
+            let updateData = {};
+            
+            if (isFirstTimeCompletion && currentLevel < 25) {
+                newCoins += 50;
+                newMaxLevel += 1;
+                updateData = {
+                    totalCoins: newCoins,
+                    maxUnlockedLevel: newMaxLevel
+                };
+                showMessage(`Correct! +50 Coins! Level ${newMaxLevel} Unlocked!`, "success");
+            } else if (isFirstTimeCompletion && currentLevel === 25) {
+                 newCoins += 50; // Bonus for last level
+                 updateData = { totalCoins: newCoins };
+                 showMessage("Correct! +50 Coins! All levels complete!", "success");
+            } else {
+                showMessage("Correct! (Level replayed)", "success");
+                // No update needed if just replaying
+            }
+            
+            try {
+                if (Object.keys(updateData).length > 0) {
+                    await updateDoc(gameDocRef, updateData);
+                }
+            } catch (error) {
+                console.error("Error updating game state: ", error);
+                showMessage("Error saving progress.", "error");
+            }
+            
+            // Go back to level select
+            setTimeout(showLevelSelect, 2000);
+        }
+        
+        // --- Shop Logic Functions ---
+
+        async function buyTheme(themeId, price) {
+            if (globalState.totalCoins < price) {
+                showMessage("Not enough coins!", "error");
+                return;
+            }
+            
+            const newCoins = globalState.totalCoins - price;
+            
+            try {
+                await updateDoc(gameDocRef, {
+                    totalCoins: newCoins,
+                    unlockedThemes: arrayUnion(themeId)
+                });
+                showMessage("Theme unlocked!", "success");
+                // The onSnapshot listener will auto-update the UI
+            } catch (error) {
+                console.error("Error buying theme: ", error);
+                showMessage("Purchase failed.", "error");
+            }
+        }
+        
+        async function applyThemePurchase(themeId) {
+            try {
+                await updateDoc(gameDocRef, {
+                    currentTheme: themeId
+                });
+                showMessage("Theme applied!", "success");
+                // onSnapshot will call applyTheme visual function
+            } catch (error) {
+                console.error("Error applying theme: ", error);
+                showMessage("Failed to apply theme.", "error");
+            }
+        }
+        
+        // --- Visual Theme Apply Function ---
+        
+        function applyTheme(themeId) {
+            const theme = themeStyles[themeId] || themeStyles['default'];
+            const root = document.documentElement;
+            
+            document.body.className = `theme-${themeId}`; // Add theme class to body
+            
+            for (const [key, value] of Object.entries(theme)) {
+                root.style.setProperty(key, value);
+            }
+            // Re-apply nav state colors
+            updateNavActiveState(currentView, true); // Pass true to only update styles
+        }
+
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        
+        /* Custom styles for dynamic properties */
+        #app-container {
+            background-color: var(--bg-primary);
+        }
+        
+        .nav-btn {
+            background-color: transparent;
+            color: var(--text-secondary);
+            border-bottom: 4px solid transparent;
+        }
+        
+        .nav-btn.active {
+            color: var(--text-accent);
+            border-bottom-color: var(--btn-primary-bg);
+        }
+        
+        #header-bar {
+            background-color: var(--bg-secondary);
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        #coin-display {
+            background-color: var(--bg-accent);
+            color: var(--text-primary);
+        }
+        
+        /* Ensure disabled buttons have the right theme colors */
+        .level-button.locked {
+            background-color: var(--btn-locked-bg);
+            color: var(--btn-locked-text);
+        }
+        
+        button.buy-btn:disabled {
+             background-color: var(--btn-disabled-bg) !important;
+        }
+        
+        .color-swatch {
+            width: 24px;
+            height: 24px;
+            border-radius: 9999px; /* circle */
+            border: 2px solid var(--text-primary);
+        }
+        
+        /* Loading Spinner */
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 5px solid var(--text-secondary);
+            border-bottom-color: var(--btn-primary-bg);
+            border-radius: 50%;
+            display: inline-block;
+            box-sizing: border-box;
+            animation: rotation 1s linear infinite;
+        }
+
+        @keyframes rotation {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+        
+        /* Special handling for rainbow button background */
+        button.level-button.unlocked, 
+        #back-to-levels,
+        button.apply-btn {
+            background: var(--btn-primary-bg);
+        }
+        
+        button.level-button.unlocked:hover,
+        #back-to-levels:hover,
+        button.apply-btn:hover {
+             background: var(--btn-primary-hover);
+        }
+        
+        /* Ensure gradient text is readable */
+        .theme-rainbow button.level-button.unlocked,
+        .theme-rainbow #back-to-levels,
+        .theme-rainbow button.apply-btn {
+            color: white;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+        }
+        
+        .theme-rainbow .nav-btn.active {
+            border-bottom-image: var(--btn-primary-bg);
+            border-bottom-style: solid;
+            border-bottom-width: 4px;
+            border-image-slice: 1;
+        }
+        
+        .theme-rainbow .shop-card-applied {
+             border-image: var(--btn-primary-bg);
+             border-image-slice: 1;
+             border-width: 2px;
+        }
+
+    </style>
+</head>
+<body class="theme-default">
+    
+    <div id="login-screen" class="relative flex flex-col items-center justify-center min-h-screen w-full max-w-4xl mx-auto p-4 text-center">
+        
+        <svg id="logo" class="w-24 h-24 mb-4" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:rgb(59, 130, 246); stop-opacity:1" /> <stop offset="100%" style="stop-color:rgb(34, 197, 94); stop-opacity:1" /> </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="45" fill="url(#logoGradient)"/>
+            <path d="M42.5 32.5 C42.5 26.15 47.65 21 54 21 C60.35 21 65.5 26.15 65.5 32.5 C65.5 37.5 62 41.5 58 43.5 L58 46 C58 47.1 57.1 48 56 48 L52 48 C50.9 48 50 47.1 50 46 L50 44.5 C45.5 42.5 42.5 38 42.5 32.5 Z M54 62 C56.76 62 59 64.24 59 67 C59 69.76 56.76 72 54 72 C51.24 72 49 69.76 49 67 C49 64.24 51.24 62 54 62 Z" fill="white" stroke="white" stroke-width="3"/>
+        </svg>
+
+        <h1 class="text-5xl md:text-6xl font-black" style="color: var(--text-accent);">
+            GuessIt!
+            <span style="color: var(--btn-primary-bg);">Trivia</span>
+        </h1>
+        <p class="text-lg mt-2 mb-8" style="color: var(--text-secondary);">Test your Free Fire knowledge!</p>
+        
+        <div class="w-full max-w-xs space-y-4">
+            <button id="google-login-btn" class="w-full py-3 px-6 rounded-lg font-bold text-lg transition-all duration-200 transform hover:scale-105 flex items-center justify-center gap-3 bg-white text-gray-700 shadow-md hover:shadow-lg">
+                <svg class="w-6 h-6" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-.97 2.53-1.94 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                Sign in with Google
+            </button>
+            
+            <button id="guest-login-btn" class="w-full py-3 px-6 rounded-lg font-bold text-lg transition-all duration-200 transform hover:scale-105" style="background-color: var(--bg-accent); color: var(--text-primary);">
+                Play as Guest
+            </button>
+        </div>
+        
+        <div id="login-loading" class="hidden mt-8">
+            <div class="spinner"></div>
+            <p id="login-message" class="text-lg mt-4" style="color: var(--text-secondary);">Loading...</p>
+        </div>
+        
+        <div class="absolute bottom-4 text-xs" style="color: var(--text-secondary);">
+            All game progress is saved to your account.
+        </div>
+    </div>
+
+    <div id="app-container" class="hidden min-h-screen w-full max-w-4xl mx-auto flex flex-col shadow-2xl" style="background-color: var(--bg-primary);">
+        
+        <header id="header-bar" class="sticky top-0 z-10 w-full p-4 shadow-md" style="background-color: var(--bg-secondary); border-bottom: 2px solid var(--border-color);">
+            <div class="flex justify-between items-center mb-2">
+                <h1 class="text-2xl md:text-3xl font-bold" style="color: var(--text-accent);">GuessIt! Trivia</h1>
+                <div id="coin-display" class="flex items-center gap-2 px-3 py-1 rounded-full font-semibold" style="background-color: var(--bg-accent); color: var(--text-primary);">
+                    Loading...
+                </div>
+            </div>
+            <div id="user-display" class="text-sm font-semibold" style="color: var(--text-primary);">
+                </div>
+        </header>
+        
+        <nav class="grid grid-cols-2" style="background-color: var(--bg-secondary);">
+            <button id="levels-btn" class="nav-btn py-3 px-4 text-lg font-bold transition-colors duration-200 flex items-center justify-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                  <path d="M5.433 13.917l1.262-3.155A4 4 0 0 1 8.58 9.5h2.84l.7-1.75.218-.546a.5.5 0 0 1 .928.372l-.32 8.001A4 4 0 0 1 8.38 16H8.18l-.2-1.18.002-.002Z" />
+                  <path d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm0-2a6 6 0 1 1 0-12 6 6 0 0 1 0 12Z" />
+                </svg>
+                <span>Levels</span>
+            </button>
+            <button id="shop-btn" class="nav-btn py-3 px-4 text-lg font-bold transition-colors duration-200 flex items-center justify-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                  <path d="M3.1 4.31A8.5 8.5 0 0 1 10 2.5c2.864 0 5.428 1.402 7 3.562l-2.03 2.03A5.5 5.5 0 0 0 10 5.5c-2.11 0-3.924 1.196-4.87 3H7a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5H3.14A8.455 8.455 0 0 1 3.1 4.31Z" />
+                  <path d="M4.51 11.09A8.455 8.455 0 0 1 4.5 9.5H7a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5H2.03A5.5 5.5 0 0 0 7 14.5c2.11 0 3.924-1.196 4.87-3H9.5a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h4.36A8.455 8.455 0 0 1 13.9 15.69l2.03-2.03A8.5 8.5 0 0 1 10 17.5c-2.864 0-5.428-1.402-7-3.562l-1.03-1.03-.02-.02Z" />
+                </svg>
+                <span>Shop</span>
+            </button>
+        </nav>
+        
+        <main id="main-content" class="flex-grow p-2">
+            <div class="text-center p-10">
+                <p class="text-xl" style="color: var(--text-primary);">Loading Game...</p>
+            </div>
+        </main>
+        
+        <footer class="p-4 text-center text-xs" style="color: var(--text-secondary); background-color: var(--bg-secondary);">
+            GuessIt! Trivia (v1_Gemini_Alpha0211) | All progress is saved automatically.
+        </footer>
+        
+    </div>
+    
+    <div id="message-box" class="hidden opacity-0 fixed bottom-4 left-1/2 -translate-x-1/2 p-4 rounded-lg shadow-lg text-white font-semibold z-50 transition-opacity duration-300">
+        </div>
+</body>
+</html>
